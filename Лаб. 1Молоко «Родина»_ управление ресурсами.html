@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Лаб. 11 — Молоко «Родина»: управление ресурсами</title>
+<style>
+:root{--bg:#FFFFFF;--fg:#000000;--card:#FFFFFF;--ok:#000000;--wait:#000000;--warn:#000000;--line:#000000;--acc:#FFA500;--bad:#FFA500}
+
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.5 system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--fg);padding:env(safe-area-inset-top,0) 14px 24px}
+h1{font-size:20px;margin:16px 0 4px} h2{font-size:16px;margin:0 0 10px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin:14px 0}
+.note{color:var(--wait);font-size:12px}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:right}
+th:first-child,td:first-child{text-align:left}
+button,select,input{font:inherit;padding:6px 10px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--fg)}
+button{cursor:pointer} button.on{background:var(--acc);color:#fff;border-color:var(--acc)}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}
+canvas{width:100%;height:auto;border:1px solid var(--line);border-radius:6px;background:var(--card)}
+.plant{display:flex;flex-wrap:wrap;gap:6px;align-items:center;justify-content:center}
+.obj{border:2px solid var(--line);border-radius:10px;padding:10px;cursor:pointer;min-width:118px;text-align:center;background:var(--card)}
+.obj.sel{border-color:var(--acc)}
+.obj b{display:block;font-size:13px}
+.st{font-size:11px;padding:2px 8px;border-radius:10px;color:#fff;display:inline-block;margin-top:4px}
+.s-work{background:#FFA500;color:#000000} .s-wait{background:#FFFFFF;color:#000000;border:1px solid #000000} .s-warn{background:#000000;color:#FFFFFF}
+.arrow{color:var(--wait);font-size:18px}
+.alert{color:var(--bad);font-weight:600}
+.ok{color:var(--ok);font-weight:600}
+.best td{background:#FFA500;color:#000000}
+</style>
+</head>
+<body>
+
+<h1>Интеллектуальная система управления ресурсами: молоко «Родина»</h1>
+<div class="note">Лабораторная работа 11. Учебный объект: условное предприятие, пастеризованное молоко «Родина». Данные синтетические, сгенерированы по явной модели (seed = 42). Управляющие воздействия выполняются только в этой программной модели.</div>
+
+<div class="card">
+<h2>Этап 1. Описание производственного участка</h2>
+<table>
+<tr><th>Участок</th><th>Вход → выход</th><th>Оборудование</th><th>Ресурсы</th><th>Измеряемые параметры</th></tr>
+<tr><td>Приёмка и резервуар сырья</td><td>сырое молоко → молоко в резервуаре</td><td>резервуар, насос</td><td>электроэнергия</td><td>расход, T на входе, загрузка</td></tr>
+<tr><td>Тепловая обработка</td><td>молоко → пастеризованное молоко</td><td>пастеризатор</td><td>энергия, вода</td><td>T процесса, давление, загрузка</td></tr>
+<tr><td>Охлаждение</td><td>горячее молоко → охлаждённое</td><td>охладитель</td><td>энергия, вода</td><td>T на выходе, загрузка</td></tr>
+<tr><td>Фасовка</td><td>молоко → упакованная продукция</td><td>фасовочная линия</td><td>энергия, упаковка</td><td>выпуск, простой</td></tr>
+<tr><td>Мойка (CIP)</td><td>—</td><td>моечная станция</td><td>энергия, вода</td><td>режим «мойка»</td></tr>
+</table>
+<p class="note" style="margin:8px 0 0">
+<b>Управляемые переменные:</b> время запуска партии, распределение партий по двум линиям, производительность линии (3300–4200 л/ч).<br>
+<b>Обязательные ограничения (не меняются ради экономии):</b> T пастеризации ≥ 72 °C; санитарная мойка проводится по расписанию; выпуск ≥ план; расход молока ≤ доступный; загрузка линии ≤ доступного времени.
+</p>
+</div>
+
+<div class="card">
+<h2>Этап 2. Подготовка данных</h2>
+<div id="dataInfo" class="note"></div>
+<div class="row"><b>Фактический расход энергии (E) и прогноз RF, 1 сутки теста, кВт·ч/5 мин</b></div>
+<canvas id="cFact" width="800" height="240"></canvas>
+<p class="note">Разбиение по времени: 70% обучение, 15% валидация, 15% тест. Масштабирование считается только по обучающей части. Перемешивание не применяется.</p>
+</div>
+
+<div class="card">
+<h2>Этапы 3–4. Модели прогнозирования электроэнергии (E<sub>t+1</sub>)</h2>
+<table id="tblModels">
+<tr><th>Модель</th><th>MAE, кВт·ч</th><th>RMSE, кВт·ч</th><th>R²</th></tr>
+</table>
+<p class="note">Реализация на JS: наивный прогноз; линейная регрессия (нормальные уравнения с L2); случайный лес (20 деревьев, глубина 5, бутстрэп, квантильные пороги); вместо LSTM — однослойная нейросеть (MLP, 16 нейронов tanh) на окне L = 12 шагов по 5 минут (1 час) с ранней остановкой. Цель — проверить, помогает ли история; нейросеть не обязана быть лучшей.</p>
+</div>
+
+<div class="card">
+<h2>Этап 5. Обнаружение отклонений</h2>
+<div id="anomInfo"></div>
+<canvas id="cRes" width="800" height="200"></canvas>
+<p class="note">Порог — 95-й процентиль ошибки на валидации. Предупреждение, если ошибка выше порога 3 интервала подряд. Это признак необычного режима, а не диагноз неисправности.</p>
+</div>
+
+<div class="card">
+<h2>Этап 6. Рекомендации по ресурсам</h2>
+<div class="row">
+<label>Сценарий:
+<select id="scen">
+<option value="base">Базовый</option>
+<option value="demand">Повышенный спрос</option>
+<option value="milk">Ограничение сырья</option>
+<option value="outage">Простой линии 2</option>
+<option value="excess">Избыточное потребление</option>
+<option value="sched">Изменение расписания</option>
+</select></label>
+<button id="btnJson">Экспорт JSON</button>
+</div>
+<div id="scenInfo" class="note"></div>
+<table id="tblRec"></table>
+<p class="note">Стоимость: J(u) = c<sub>E</sub>·E(u) + c<sub>W</sub>·W(u). Учебные тарифы: c<sub>E</sub> = 25 тг/кВт·ч (×1,3 в пиковые часы 18–22), c<sub>W</sub> = 0,6 тг/л; выход = 0,97 л на литр молока. Варианты: одна линия или две линии, производительность 3300–4200 л/ч, время запуска 06:00–16:00. Затем выбирается минимум J при ограничениях Q ≥ Q<sub>план</sub>, M ≤ M<sub>доступно</sub>, H<sub>j</sub> ≤ H<sub>доступно,j</sub>. Эффект проверяется в симуляторе, а не считается доказанной экономией.</p>
+</div>
+
+<div class="card">
+<h2>Виртуальный цех (настольный прототип)</h2>
+<div class="row">
+<label>Момент: <input type="range" id="tSlider" min="0" max="0" value="0" style="width:260px"></label>
+<span id="tLabel" class="note"></span>
+<button id="btnOrig" class="on">Исходное расписание</button>
+<button id="btnRec">Рекомендуемое</button>
+</div>
+<div class="note">Последнее обновление данных: <span id="lastUpd"></span></div>
+<div class="plant" id="plant" style="margin:12px 0"></div>
+<div id="detail" class="card" style="margin:0"></div>
+</div>
+
+<div class="card">
+<h2>Сравнение сценариев</h2>
+<table id="tblScen"></table>
+<p class="note">Все сценарии сравниваются при одинаковых исходных условиях (один и тот же набор данных и модели). Экономия не считается, если план не выполнен.</p>
+</div>
+
+<div class="card">
+<h2>Версии и воспроизводимость</h2>
+<div class="note">Язык: JavaScript (ES2020), без внешних библиотек. Генератор случайных чисел: mulberry32, seed = 42. Окно L = 12, лес: 20 деревьев, глубина 5, mtry = √d; MLP: 16 нейронов, lr = 0.01, до 80 эпох, терпение 8; линейная модель: λ = 1e-3. Программа работает в браузере без установки.</div>
+</div>
+
+<div class="card">
+<h2>Ответы на контрольные вопросы</h2>
+<ol style="padding-left:20px;text-align:left">
+<li><b>Какие ресурсы учитываются?</b> Электроэнергия, вода, молочное сырьё, упаковка и время работы оборудования.</li>
+<li><b>Чем прогноз отличается от управления?</b> Прогноз оценивает расход при текущих параметрах. Управление выбирает режим, который выполняет план при минимальных затратах и ограничениях.</li>
+<li><b>Почему данные делят хронологически?</b> Модель должна обучаться на прошлом и проверяться на будущем, как в реальной эксплуатации. Случайное деление даёт завышенную оценку из-за похожих соседних наблюдений.</li>
+<li><b>Как возникает утечка при подготовке признаков?</b> Когда в признаки попадают значения, известные только после момента прогноза, например будущий выпуск или статистики, посчитанные по всей выборке, включая тест.</li>
+<li><b>Когда глубокое обучение уступает простой модели?</b> При малом объёме данных, простых почти линейных зависимостях или когда важны интерпретируемость и устойчивость.</li>
+<li><b>Почему превышение порога не доказывает неисправность?</b> Ошибка может быть вызвана сменой сырья, температурным режимом или ошибкой модели. Порог показывает только необычное поведение, причину нужно искать на месте.</li>
+<li><b>Какие ограничения обязательны?</b> Температура пастеризации, санитарные требования, выполнение плана по выпуску, доступный объём сырья и доступное время оборудования.</li>
+<li><b>Как проверить, что снижение затрат связано с эффективным использованием ресурсов?</b> Сравнить исходный и рекомендуемый режим при одинаковых условиях, проверить выполнение плана и удельные показатели (энергия и вода на литр), а не только абсолютные затраты.</li>
+<li><b>Какую функцию выполняет виртуальная среда?</b> Делает состояние оборудования, прогнозы и предупреждения наглядными и позволяет сравнить два расписания до внедрения. Реальное оборудование она не управляет.</li>
+<li><b>Какие проверки нужны перед внедрением?</b> Проверка на реальных данных предприятия за длительный период, согласование с технологами и санитарным контролем, пилот на одной линии с ручным подтверждением решений, контроль ложных тревог.</li>
+</ol>
+</div>
+
+<script>
+// ================= 1. Синтетические данные (seed 42) =================
+function mulberry32(a){return()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+const SEED=42, N=5000, CYCLE=48, START=Date.UTC(2026,0,1), STEP_MS=5*60000, YLD=0.97;
+const rnd=mulberry32(SEED);
+const gauss=s=>{const u=Math.max(rnd(),1e-12),v=rnd();return s*Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v)};
+
+// аномалии (известны — для precision/recall): блоки по 8 шагов, только в режиме производства
+const anomSet=new Set();
+for(let i=100;i<N;i++) if(rnd()<0.004) for(let j=0;j<8;j++) anomSet.add(i+j);
+
+const A={m0:[],m1:[],flow:[],load:[],pt:[],pr:[],amb:[],E:[],W:[],out:[],lab:[]};
+for(let i=0;i<N;i++){
+  const ph=i%CYCLE;
+  const mode= ph<36?0: ph<42?1:2; // 0 производство, 1 ожидание, 2 мойка
+  const amb=18+8*Math.sin(2*Math.PI*i/288)+gauss(0.6);
+  let flow=0,load,pt,pr,E,W,out=0;
+  if(mode===0){
+    flow=3800+300*Math.sin(i/50)+gauss(60);
+    load=70+(flow-3800)/50+gauss(1.5);
+    pt=72+gauss(0.6); pr=3.2+gauss(0.08);
+    E=1.2+0.0008*flow+0.012*load+gauss(0.12);
+    W=0.35*flow*5/60+gauss(4);
+    out=flow*5/60*YLD+gauss(3);
+  } else if(mode===1){
+    load=20+gauss(1); pt=6+gauss(0.5); pr=0.6+gauss(0.05);
+    E=0.8+0.01*load+gauss(0.05); W=8+gauss(1);
+  } else {
+    load=35+gauss(2); pt=74+gauss(1); pr=1.8+gauss(0.1);
+    E=3.5+0.02*load+gauss(0.12); W=260+gauss(10);
+  }
+  const lab=anomSet.has(i)&&mode===0;
+  if(lab) E*=1.4;
+  A.m0.push(mode===0?1:0); A.m1.push(mode===1?1:0);
+  A.flow.push(Math.max(0,flow)); A.load.push(load); A.pt.push(pt); A.pr.push(pr); A.amb.push(amb);
+  A.E.push(E); A.W.push(Math.max(0,W)); A.out.push(Math.max(0,out)); A.lab.push(lab);
+}
+const hrOf=i=>(i*5/60)%24;
+const toX=(e1,e2,e3,f,l,p,pr,a,m0,m1,hr)=>[e1,e2,e3,f,l,p,pr,a,m0,m1,Math.sin(2*Math.PI*hr/24),Math.cos(2*Math.PI*hr/24)];
+const featAt=i=>toX(A.E[i],A.E[i-1],A.E[i-2],A.flow[i],A.load[i],A.pt[i],A.pr[i],A.amb[i],A.m0[i],A.m1[i],hrOf(i));
+
+// выборки: признаки на момент t, цель E[t+1]; без утечки будущего
+const S=[]; for(let i=12;i<N-1;i++) S.push(i);
+const nS=S.length, nTr=Math.floor(nS*0.7), nVa=Math.floor(nS*0.15), nTe=nS-nTr-nVa;
+const X=S.map(featAt), yAll=S.map(i=>A.E[i+1]), wAll=S.map(i=>A.W[i+1]);
+const d=X[0].length, mu=new Array(d).fill(0), sd=new Array(d).fill(0);
+for(let r=0;r<nTr;r++) for(let k=0;k<d;k++) mu[k]+=X[r][k]/nTr;
+for(let r=0;r<nTr;r++) for(let k=0;k<d;k++) sd[k]+=(X[r][k]-mu[k])**2/nTr;
+for(let k=0;k<d;k++) sd[k]=Math.sqrt(sd[k])||1;
+const Xs=X.map(x=>x.map((v,k)=>(v-mu[k])/sd[k]));
+const scale=x=>x.map((v,k)=>(v-mu[k])/sd[k]);
+
+// ================= 2. Модели =================
+function solve(M,b){const n=b.length;for(let i=0;i<n;i++){let p=i;for(let r=i+1;r<n;r++)if(Math.abs(M[r][i])>Math.abs(M[p][i]))p=r;[M[i],M[p]]=[M[p],M[i]];[b[i],b[p]]=[b[p],b[i]];for(let r=i+1;r<n;r++){const f=M[r][i]/M[i][i];for(let c=i;c<n;c++)M[r][c]-=f*M[i][c];b[r]-=f*b[i];}}const x=new Float64Array(n);for(let i=n-1;i>=0;i--){let s=b[i];for(let c=i+1;c<n;c++)s-=M[i][c]*x[c];x[i]=s/M[i][i];}return x}
+function fitLR(Xa,y,lam=1e-3){const p=Xa[0].length+1,M=Array.from({length:p},()=>new Float64Array(p)),b=new Float64Array(p);
+  for(let r=0;r<Xa.length;r++){const x=[1,...Xa[r]];for(let a=0;a<p;a++){b[a]+=x[a]*y[r];for(let c=0;c<p;c++)M[a][c]+=x[a]*x[c];}}
+  for(let a=1;a<p;a++)M[a][a]+=lam;const w=solve(M,b);return x=>w[0]+x.reduce((s,v,k)=>s+v*w[k+1],0)}
+
+function buildTree(Xa,y,idx,depth,rg){const n=idx.length;let sum=0;for(const i of idx)sum+=y[i];const mean=sum/n;
+  if(depth===0||n<20)return{v:mean};
+  const m=Math.max(1,Math.round(Math.sqrt(d))),base=sum*sum/n;let best=null;
+  for(let t=0;t<m;t++){const f=Math.floor(rg()*d);const vals=idx.map(i=>Xa[i][f]).sort((a,b)=>a-b);
+    for(let q=1;q<10;q++){const th=vals[Math.floor(q*n/10)];let sl=0,nl=0;
+      for(const i of idx)if(Xa[i][f]<th){sl+=y[i];nl++;}
+      const nr=n-nl;if(nl<5||nr<5)continue;const sr=sum-sl;const gain=sl*sl/nl+sr*sr/nr-base;
+      if(!best||gain>best.gain)best={f,th,gain};}}
+  if(!best||best.gain<=0)return{v:mean};
+  const L=idx.filter(i=>Xa[i][best.f]<best.th),R=idx.filter(i=>Xa[i][best.f]>=best.th);
+  return{f:best.f,th:best.th,l:buildTree(Xa,y,L,depth-1,rg),r:buildTree(Xa,y,R,depth-1,rg)};}
+const predTree=(t,x)=>{while(t.f!==undefined)t=x[t.f]<t.th?t.l:t.r;return t.v};
+
+// MLP на окне L=12 и 6 каналах
+const CH=[A.E,A.flow,A.load,A.pt,A.m0,A.m1],L=12;
+const chMu=CH.map(c=>{let s=0;for(let i=0;i<=S[nTr-1];i++)s+=c[i];return s/(S[nTr-1]+1)});
+const chSd=CH.map((c,k)=>{let s=0;for(let i=0;i<=S[nTr-1];i++)s+=(c[i]-chMu[k])**2;return Math.sqrt(s/(S[nTr-1]+1))||1});
+const Xw=S.map(i=>{const v=[];for(let s=0;s<L;s++){const j=i-(L-1)+s;for(let c=0;c<CH.length;c++)v.push((CH[c][j]-chMu[c])/chSd[c]);}return v});
+const yMu=yAll.slice(0,nTr).reduce((a,b)=>a+b,0)/nTr;
+const ySd=Math.sqrt(yAll.slice(0,nTr).reduce((a,b)=>a+(b-yMu)**2,0)/nTr)||1;
+const yS=yAll.map(v=>(v-yMu)/ySd);
+
+function trainMLP(){const D=Xw[0].length,H=16,rg=mulberry32(SEED+1);
+  let W1=Array.from({length:H},()=>Float64Array.from({length:D},()=>(rg()*2-1)/Math.sqrt(D)));
+  let b1=new Float64Array(H),W2=Float64Array.from({length:H},()=>(rg()*2-1)/Math.sqrt(H)),b2=0;
+  const h=new Float64Array(H);
+  const fwd=x=>{let o=b2;for(let j=0;j<H;j++){let s=b1[j];const w=W1[j];for(let k=0;k<D;k++)s+=w[k]*x[k];h[j]=Math.tanh(s);o+=W2[j]*h[j];}return o};
+  let best=null,bestL=Infinity,bad=0;const lr=0.01;
+  for(let ep=0;ep<80;ep++){
+    for(let r=0;r<nTr;r++){const x=Xw[r];const err=fwd(x)-yS[r];
+      for(let j=0;j<H;j++){const dh=err*W2[j]*(1-h[j]*h[j]);W2[j]-=lr*err*h[j];b1[j]-=lr*dh;const w=W1[j];for(let k=0;k<D;k++)w[k]-=lr*dh*x[k];}
+      b2-=lr*err;}
+    let vl=0;for(let r=nTr;r<nTr+nVa;r++){const e=fwd(Xw[r])-yS[r];vl+=e*e;}vl/=nVa;
+    if(vl<bestL-1e-6){bestL=vl;bad=0;best={W1:W1.map(w=>Float64Array.from(w)),b1:Float64Array.from(b1),W2:Float64Array.from(W2),b2};}
+    else if(++bad>=8)break;
+  }
+  W1=best.W1;b1=best.b1;W2=best.W2;b2=best.b2;
+  return{epochsBest:bestL,pred:x=>fwd(x)*ySd+yMu,fwdFn:fwd};}
+
+// --- обучение ---
+const predNaive=S.map(i=>A.E[i]);
+const lrE=fitLR(Xs.slice(0,nTr),yAll.slice(0,nTr));
+const predLR=Xs.map(lrE);
+const lrW=fitLR(Xs.slice(0,nTr),wAll.slice(0,nTr));
+const rgT=mulberry32(SEED+7);
+const forest=[];
+for(let t=0;t<20;t++){const idx=[];for(let k=0;k<nTr;k++)idx.push(Math.floor(rgT()*nTr));forest.push(buildTree(X,yAll,idx,5,rgT));}
+const predRF=X.map(x=>forest.reduce((s,t)=>s+predTree(t,x),0)/forest.length);
+const mlp=trainMLP();
+const predMLP=Xw.map(x=>mlp.pred(x));
+
+// ================= 3. Метрики =================
+const te0=nTr+nVa;
+function metrics(p){let ae=0,se=0,m=0;for(let k=te0;k<nS;k++){m+=yAll[k]}m/=nTe;let ss=0;
+  for(let k=te0;k<nS;k++){const e=yAll[k]-p[k];ae+=Math.abs(e);se+=e*e;ss+=(yAll[k]-m)**2;}
+  return{mae:ae/nTe,rmse:Math.sqrt(se/nTe),r2:1-se/ss};}
+const MET={naive:metrics(predNaive),lr:metrics(predLR),rf:metrics(predRF),mlp:metrics(predMLP)};
+
+// ================= 4. Обнаружение отклонений (модель RF) =================
+const res=yAll.map((y,k)=>Math.abs(y-predRF[k]));
+const valRes=res.slice(nTr,te0).sort((a,b)=>a-b);
+const THR=valRes[Math.floor(0.95*(valRes.length-1))];
+function alertsFrom(resArr){const flag=resArr.map(r=>r>THR);const al=new Array(flag.length).fill(false);let run=0;
+  for(let k=0;k<flag.length;k++){run=flag[k]?run+1:0;if(run>=3)al[k]=true;}return al}
+const alertArr=alertsFrom(res);
+let TP=0,FP=0,FN=0;const episodes=[];
+for(let k=te0;k<nS;k++){const lab=A.lab[S[k]+1],al=alertArr[k];if(al&&lab)TP++;else if(al)FP++;else if(lab)FN++;}
+{let k=te0;while(k<nS){if(A.lab[S[k]+1]){const st=k;while(k<nS&&A.lab[S[k]+1])k++;let first=-1;for(let q=st;q<k;q++)if(alertArr[q]){first=q;break}
+  episodes.push({start:st,delay:first<0?null:(first-st)*5});}else k++;}}
+const precision=TP/Math.max(1,TP+FP), recall=TP/Math.max(1,TP+FN);
+
+// ================= 5. Симулятор и рекомендации =================
+const TAR={cE:25,cW:0.6,peak:1.3,H:8};
+const lrTpl=f=>toX(5,5,5,f,70+(f-3800)/50,72,3.2,18,1,0,12);
+const EpF=f=>lrE(scale(lrTpl(f))), WpF=f=>lrW(scale(lrTpl(f)));
+const SCEN={
+  base:{name:'Базовый',Q:25000,milk:40000,l2:8,orig:16,ef:1},
+  demand:{name:'Повышенный спрос',Q:36000,milk:40000,l2:8,orig:16,ef:1},
+  milk:{name:'Ограничение сырья',Q:25000,milk:22000,l2:8,orig:16,ef:1},
+  outage:{name:'Простой линии 2',Q:25000,milk:40000,l2:3,orig:16,ef:1},
+  excess:{name:'Избыточное потребление',Q:25000,milk:40000,l2:8,orig:16,ef:1.4},
+  sched:{name:'Изменение расписания',Q:25000,milk:40000,l2:8,orig:20,ef:1}
+};
+function evalV(v,sc){let Q=0,milk=0,E=0,W=0,J=0,hOK=true;
+  for(const Ln of v.lines){const cap=Ln.line===1?TAR.H:sc.l2;if(Ln.h>cap+1e-9)hOK=false;
+    const n=Math.round(Ln.h*12),ep=EpF(Ln.f),wp=WpF(Ln.f);
+    for(let k=0;k<n;k++){const hr=(Ln.s+k*5/60)%24;const tf=(hr>=18&&hr<22)?TAR.peak:1;
+      E+=ep;W+=wp;J+=TAR.cE*tf*ep+TAR.cW*wp;}
+    Q+=Ln.f*Ln.h*YLD;milk+=Ln.f*Ln.h;}
+  const ok=Q>=sc.Q-1e-6&&milk<=sc.milk+1e-6&&hOK;
+  return{...v,Q,milk,E,W,J,ok};}
+function candidates(sc){const out=[];const fs=[3300,3600,3900,4200],ss=[6,8,10,12,14,16];
+  for(const f of fs){const h=sc.Q/(f*YLD);for(const s of ss)out.push({name:'одна линия',lines:[{line:1,f,h,s}]});}
+  for(const f of fs){const h=sc.Q/(2*f*YLD);for(const s of ss){out.push({name:'две линии, одновременный старт',lines:[{line:1,f,h,s},{line:2,f,h,s}]});out.push({name:'две линии, сдвиг 2 ч',lines:[{line:1,f,h,s},{line:2,f,h,s:s+2}]});}}
+  return out;}
+function compute(key){
+  const sc=SCEN[key];
+  const orig=evalV({name:'исходное',lines:[{line:1,f:3800,h:8,s:sc.orig}]},sc);
+  const all=candidates(sc).map(v=>evalV(v,sc));
+  const feas=all.filter(v=>v.ok).sort((a,b)=>a.J-b.J);
+  const maxOut=sc.milk*YLD;
+  return{sc,orig,best:feas[0]||null,top:feas.slice(0,6),maxOut};
+}
+
+// ================= 6. Отрисовка =================
+const $=id=>document.getElementById(id);
+const f2=(v,d=2)=>Number(v).toFixed(d);
+const fmtTs=i=>new Date(START+i*STEP_MS).toLocaleString('ru-RU');
+
+function drawChart(id,series,yMin,yMax){const c=$(id),g=c.getContext('2d'),w=c.width,h=c.height,pad=34;
+  g.clearRect(0,0,w,h);let mn=yMin,mx=yMax;
+  if(mn===undefined){mn=Infinity;mx=-Infinity;series.forEach(s=>s.y.forEach(v=>{if(v<mn)mn=v;if(v>mx)mx=v}));}
+  const n=series[0].y.length;
+  series.forEach(s=>{g.beginPath();g.strokeStyle=s.color;g.lineWidth=s.w||1.5;if(s.dash)g.setLineDash(s.dash);else g.setLineDash([]);
+    s.y.forEach((v,i)=>{const x=pad+(w-2*pad)*i/(n-1),y=h-pad-(h-2*pad)*(v-mn)/((mx-mn)||1);i?g.lineTo(x,y):g.moveTo(x,y)});g.stroke();});
+  g.setLineDash([]);g.fillStyle='#000000';g.font='12px sans-serif';
+  g.fillText(f2(mx,1),2,pad);g.fillText(f2(mn,1),2,h-pad);
+  series.forEach((s,k)=>{g.fillStyle=s.color;g.fillText(s.label,pad+k*170,14)});}
+
+function renderModels(){
+  $('dataInfo').textContent=`N = ${N} наблюдений, шаг 5 мин, обучение ${nTr}, валидация ${nVa}, тест ${nTe}. Аномалий в разметке: ${A.lab.filter(Boolean).length} (${(100*A.lab.filter(Boolean).length/N).toFixed(1)}%). Режимы: производство 36 шагов, ожидание 6, мойка 6 (цикл 4 ч).`;
+  const rows=[['Базовый прогноз (E<sub>t+1</sub> = E<sub>t</sub>)',MET.naive],['Линейная регрессия',MET.lr],['Случайный лес (20 деревьев)',MET.rf],['MLP на окне L = 12 (вместо LSTM)',MET.mlp]];
+  $('tblModels').innerHTML='<tr><th>Модель</th><th>MAE, кВт·ч</th><th>RMSE, кВт·ч</th><th>R²</th></tr>'+rows.map(([n,m])=>`<tr><td>${n}</td><td>${f2(m.mae,3)}</td><td>${f2(m.rmse,3)}</td><td>${f2(m.r2,3)}</td></tr>`).join('');
+  const day=288,k0=te0;
+  drawChart('cFact',[{y:yAll.slice(k0,k0+day),color:'#000000',label:'факт'},{y:predRF.slice(k0,k0+day),color:'#FFA500',label:'прогноз RF',w:1.2},{y:predNaive.slice(k0,k0+day),color:'#000000',label:'наивный',w:1,dash:[4,3]}]);
+  const ev=episodes.length;
+  $('anomInfo').innerHTML=`Порог (95-й процентиль, валидация): <b>${f2(THR,3)} кВт·ч</b>. На тесте: предупреждений по точкам — TP ${TP}, FP ${FP}, FN ${FN}; precision = <b>${f2(precision,2)}</b>, recall = <b>${f2(recall,2)}</b>. Задержка обнаружения по эпизодам (мин): ${episodes.map(e=>e.delay===null?'не обнаружено':e.delay).join(', ')||'нет эпизодов на тесте'}.<br>
+  <span class="note">Сообщение системы: «Обнаружено отклонение потребления энергии. Требуется проверка режима работы оборудования».</span>`;
+  drawChart('cRes',[{y:res.slice(k0,k0+day),color:'#FFA500',label:'|E − Ê|'},{y:new Array(day).fill(THR),color:'#000000',label:'порог',dash:[5,4]}]);
+}
+
+function renderRec(){
+  const key=$('scen').value,R=compute(key),sc=R.sc;
+  $('scenInfo').innerHTML=`Q<sub>план</sub> = ${sc.Q} л, M<sub>доступно</sub> = ${sc.milk} л, доступность линии 2 = ${sc.l2} ч, исходный старт = ${sc.orig}:00, коэффициент энергии = ${sc.ef}.`+(sc.ef!==1?` <span class="alert">Энергия факта завышена на ${Math.round((sc.ef-1)*100)}%.</span>`:'');
+  const head='<tr><th>Вариант</th><th>Линии</th><th>Выпуск, л</th><th>Молоко, л</th><th>Энергия, кВт·ч</th><th>Вода, л</th><th>Затраты, тг</th><th>Ограничения</th></tr>';
+  const row=(v,cls)=>`<tr class="${cls||''}"><td>${v.name}${cls==='best'?' ★':''}</td><td>${v.lines.map(l=>`Л${l.line}: ${f2(l.f,0)} л/ч, с ${l.s}:00, ${f2(l.h,2)} ч`).join('<br>')}</td><td>${f2(v.Q,0)}</td><td>${f2(v.milk,0)}</td><td>${f2(v.E,1)}</td><td>${f2(v.W,0)}</td><td>${f2(v.J,0)}</td><td class="${v.ok?'ok':'alert'}">${v.ok?'да':'нет'}</td></tr>`;
+  const o=R.orig;
+  let body=head+row(o,'');
+  if(R.best){body+=R.top.map(v=>row(v,v===R.best?'best':'')).join('');
+    $('tblRec').innerHTML=body;
+    $('scenInfo').innerHTML+=`<br><b>Рекомендация:</b> ${R.best.name}, экономия затрат ${f2(o.J-R.best.J,0)} тг (${f2(100*(o.J-R.best.J)/o.J,1)}%) при выполнении плана.`;
+  } else {
+    $('tblRec').innerHTML=body;
+    $('scenInfo').innerHTML+=`<br><span class="alert">Допустимого варианта нет.</span> Максимальный выпуск при доступном молоке: ${f2(R.maxOut,0)} л (план ${sc.Q} л).`;
+  }
+  window._best=R.best||o;window._orig=o;
+}
+
+function renderScenTable(){
+  const head='<tr><th>Сценарий</th><th>Выпуск, л (рек.)</th><th>Затраты, тг (исх.)</th><th>Затраты, тг (рек.)</th><th>Экономия, тг</th><th>План выполнен</th></tr>';
+  const rows=Object.keys(SCEN).map(k=>{const R=compute(k);const b=R.best,o=R.orig;
+    return`<tr><td>${SCEN[k].name}</td><td>${b?f2(b.Q,0):'—'}</td><td>${f2(o.J,0)}</td><td>${b?f2(b.J,0):'—'}</td><td>${b?f2(o.J-b.J,0):'—'}</td><td class="${b?'ok':'alert'}">${b?'да':'нет'}</td></tr>`}).join('');
+  $('tblScen').innerHTML=head+rows;
+}
+
+// --- виртуальный цех ---
+let mode='orig', sel='furnace';
+const OBJS=[
+  {id:'tank',name:'Резервуар сырья',prod:false},
+  {id:'furnace',name:'Тепловая обработка',prod:true},
+  {id:'cooler',name:'Охладитель',prod:true},
+  {id:'filler',name:'Фасовочная линия',prod:true},
+  {id:'panel',name:'Панель оператора',prod:true}
+];
+const testIdx=()=>te0+Number($('tSlider').value);
+function renderPlant(){
+  const k=testIdx(),i=S[k],R=window._best,O=window._orig,sc=SCEN[$('scen').value];
+  const isRec=mode==='rec';
+  const ratio=isRec&&R?(R.lines[0].f/3800):1;
+  const isProd=A.m0[i]===1, isWait=A.m1[i]===1;
+  const alert=alertArr[k];
+  const fact=sc.ef*A.E[i], fcst=predRF[k], r=Math.abs(sc.ef*yAll[k]-predRF[k]);
+  const alarmNow=alertArr[k]||(sc.ef!==1&&r>THR&&k>=2&&[k-2,k-1,k].every(q=>Math.abs(sc.ef*yAll[q]-predRF[q])>THR));
+  $('tLabel').textContent=fmtTs(i);
+  $('lastUpd').textContent=fmtTs(i);
+  $('plant').innerHTML=OBJS.map((o,n)=>{
+    let st=o.prod?(isProd?'работает':(isWait?'ожидание':'ожидание')):'работает';
+    if(o.id==='tank'&&!isProd)st='ожидание';
+    if(o.prod&&isProd&&alarmNow)st='предупреждение';
+    if(o.id==='panel')st=alarmNow?'предупреждение':'работает';
+    const cls=st==='работает'?'s-work':st==='ожидание'?'s-wait':'s-warn';
+    const arrow=n<OBJS.length-1?'<span class="arrow">→</span>':'';
+    return`<div class="obj ${sel===o.id?'sel':''}" data-id="${o.id}"><b>${o.name}</b><span class="st ${cls}">${st}</span></div>${arrow}`}).join('');
+  document.querySelectorAll('.obj').forEach(el=>el.onclick=()=>{sel=el.dataset.id;renderPlant()});
+  const loadV=isProd?(A.load[i]*ratio):A.load[i];
+  const params={
+    tank:`расход молока ${f2(A.flow[i]*ratio,0)} л/ч, T на входе ~4 °C`,
+    furnace:`T процесса ${f2(A.pt[i],1)} °C, давление ${f2(A.pr[i],2)} бар, загрузка ${f2(loadV,1)} %`,
+    cooler:`загрузка ${f2(loadV,1)} %, охлаждение продукта`,
+    filler:`выпуск ${f2(A.out[i]*ratio,0)} л за интервал, загрузка ${f2(loadV,1)} %`,
+    panel:`режим: ${isProd?'производство':isWait?'ожидание':'мойка'}, окружающая T ${f2(A.amb[i],1)} °C`};
+  const o=OBJS.find(x=>x.id===sel);
+  const msg=alarmNow?'Обнаружено отклонение потребления энергии. Требуется проверка режима работы оборудования.':'Отклонений не обнаружено.';
+  const act=alarmNow?'Проверить режим работы оборудования (не является диагнозом неисправности).':(isRec?'Работать по рекомендуемому расписанию.':'Работать по исходному расписанию.');
+  $('detail').innerHTML=`<b>${o.name}</b> — ${params[o.id]}<br>
+  Фактическое потребление энергии: <b>${f2(fact,2)}</b> кВт·ч за интервал, вода: ${f2(A.W[i],0)} л.<br>
+  Прогноз на следующий интервал: <b>${f2(fcst,2)}</b> кВт·ч.<br>
+  Сообщение: <span class="${alarmNow?'alert':''}">${msg}</span><br>
+  Рекомендуемое действие: ${act}<br>
+  <span class="note">Режим: ${isRec?'рекомендуемое расписание':'исходное расписание'}. Управляющие воздействия выполняются только в модели.</span>`;
+}
+
+// ================= 7. Экспорт и запуск =================
+$('btnJson').onclick=()=>{const key=$('scen').value,R=compute(key);
+  const data={scenario:SCEN[key].name,updated:fmtTs(S[testIdx()]),forecast_next_kWh:+predRF[testIdx()].toFixed(3),
+    recommended:R.best?{name:R.best.name,lines:R.best.lines,Q_l:+R.best.Q.toFixed(0),J_tg:+R.best.J.toFixed(0)}:null,
+    original_J_tg:+R.orig.J.toFixed(0),alert_threshold_kWh:+THR.toFixed(3),seed:SEED};
+  const b=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='forecast.json';a.click();};
+$('scen').onchange=()=>{renderRec();renderScenTable();renderPlant();};
+$('btnOrig').onclick=()=>{mode='orig';$('btnOrig').classList.add('on');$('btnRec').classList.remove('on');renderPlant();};
+$('btnRec').onclick=()=>{mode='rec';$('btnRec').classList.add('on');$('btnOrig').classList.remove('on');renderPlant();};
+$('tSlider').max=nTe-1;$('tSlider').value=Math.floor(nTe/2);
+$('tSlider').oninput=renderPlant;
+
+renderModels();
+renderRec();
+renderScenTable();
+renderPlant();
+</script>
+</body>
+</html>
